@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 export interface SettingSpec {
@@ -25,6 +26,16 @@ export interface SettingSpec {
   step: number;
   hint?: string;
   onChange: (v: number) => void;
+  /** When set, overrides the panel-level disabled state for this control. */
+  disabledOverride?: boolean;
+}
+
+export interface ToggleSpec {
+  key: string;
+  label: string;
+  value: boolean;
+  hint?: string;
+  onChange: (v: boolean) => void;
 }
 
 const INTERVALS = [
@@ -55,8 +66,9 @@ function SettingSlider({
   spec: SettingSpec;
   disabled: boolean;
 }) {
-  const { label, value, min, max, step, hint, onChange } = spec;
+  const { label, value, min, max, step, hint, onChange, disabledOverride } = spec;
   const digits = decimalsFor(step);
+  const isDisabled = disabledOverride !== undefined ? disabledOverride : disabled;
 
   // Local string buffer so typing isn't interrupted by number formatting.
   const [text, setText] = useState(value.toFixed(digits));
@@ -100,7 +112,7 @@ function SettingSlider({
           type="text"
           inputMode="decimal"
           value={text}
-          disabled={disabled}
+          disabled={isDisabled}
           onChange={(e) => setText(e.target.value)}
           onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
@@ -122,7 +134,7 @@ function SettingSlider({
         max={max}
         step={step}
         onValueChange={(v) => onChange(v[0])}
-        disabled={disabled}
+        disabled={isDisabled}
         className="[&_[data-slot=slider-range]]:bg-binance-yellow [&_[data-slot=slider-thumb]]:border-binance-yellow"
       />
       {hint && (
@@ -143,6 +155,7 @@ export function SettingsPanel({
   onIntervalChange,
   commonSettings,
   extraSettings,
+  toggles = [],
   disabled,
   onReset,
   description,
@@ -151,6 +164,7 @@ export function SettingsPanel({
   onIntervalChange: (v: string) => void;
   commonSettings: SettingSpec[];
   extraSettings: SettingSpec[];
+  toggles?: ToggleSpec[];
   disabled: boolean;
   onReset: () => void;
   description?: string;
@@ -211,6 +225,36 @@ export function SettingsPanel({
           <SettingSlider key={s.key} spec={s} disabled={disabled} />
         ))}
       </div>
+
+      {/* Boolean toggles */}
+      {toggles.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-5 pt-4 border-t border-border">
+          {toggles.map((t) => (
+            <div key={t.key} className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-3">
+                <Label
+                  htmlFor={t.key}
+                  className="text-xs uppercase tracking-wide text-binance-muted cursor-pointer"
+                >
+                  {t.label}
+                </Label>
+                <Switch
+                  id={t.key}
+                  checked={t.value}
+                  onCheckedChange={t.onChange}
+                  disabled={disabled}
+                  className="data-[state=checked]:bg-binance-green"
+                />
+              </div>
+              {t.hint && (
+                <span className="text-[10px] text-binance-muted/80 leading-tight">
+                  {t.hint}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

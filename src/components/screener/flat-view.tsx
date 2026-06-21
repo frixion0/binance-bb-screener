@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, Download, ExternalLink, Minus, TrendingDown, TrendingUp } from "lucide-react";
+import { Activity, CheckCircle2, Download, ExternalLink, Flame, Minus, TrendingDown, TrendingUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
-import { SettingSpec, SettingsPanel } from "./settings-panel";
+import { SettingSpec, SettingsPanel, ToggleSpec } from "./settings-panel";
 import { Sparkline } from "./sparkline";
 import {
   EmptyState,
@@ -35,9 +35,11 @@ interface FlatMatch {
   maxDeviation: number;
   endOffset: number;
   recentBBs: number[];
+  bullishEngulfing: boolean;
+  beOffset: number | null;
 }
 
-type SortKey = "symbol" | "price" | "runLength" | "avgBB" | "deviation";
+type SortKey = "symbol" | "price" | "runLength" | "avgBB" | "deviation" | "be";
 type SortDir = "asc" | "desc";
 
 const DEFAULTS = {
@@ -48,6 +50,8 @@ const DEFAULTS = {
   maxSlope: 0.05,
   minRunLength: 3,
   lookback: 30,
+  requireBE: false,
+  beWindow: 3,
 };
 
 export function FlatView() {
@@ -58,6 +62,8 @@ export function FlatView() {
   const [maxSlope, setMaxSlope] = useState(DEFAULTS.maxSlope);
   const [minRunLength, setMinRunLength] = useState(DEFAULTS.minRunLength);
   const [lookback, setLookback] = useState(DEFAULTS.lookback);
+  const [requireBE, setRequireBE] = useState(DEFAULTS.requireBE);
+  const [beWindow, setBeWindow] = useState(DEFAULTS.beWindow);
   const [sortKey, setSortKey] = useState<SortKey>("runLength");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
@@ -76,6 +82,8 @@ export function FlatView() {
       maxSlope: String(maxSlope),
       minRunLength: String(minRunLength),
       lookback: String(lookback),
+      requireBullishEngulfing: requireBE ? "1" : "0",
+      beWindow: String(beWindow),
     });
     scan.start(`/api/scan/flat?${params.toString()}`);
   };
@@ -88,6 +96,8 @@ export function FlatView() {
     setMaxSlope(DEFAULTS.maxSlope);
     setMinRunLength(DEFAULTS.minRunLength);
     setLookback(DEFAULTS.lookback);
+    setRequireBE(DEFAULTS.requireBE);
+    setBeWindow(DEFAULTS.beWindow);
   };
 
   const commonSettings: SettingSpec[] = [
@@ -152,6 +162,27 @@ export function FlatView() {
       hint: "How many recent %B candles to inspect for a straight segment.",
       onChange: setLookback,
     },
+    {
+      key: "beWindow",
+      label: "Bullish Engulf Window",
+      value: beWindow,
+      min: 1,
+      max: 20,
+      step: 1,
+      hint: "How many recent candle-pairs to scan for a bullish engulfing pattern.",
+      onChange: setBeWindow,
+      disabledOverride: scanning || !requireBE,
+    },
+  ];
+
+  const toggles: ToggleSpec[] = [
+    {
+      key: "requireBE",
+      label: "Require Bullish Engulfing",
+      value: requireBE,
+      hint: "Only return straight-line matches that also show a bullish engulfing candle (bullish body fully engulfs the prior bearish body) within the window.",
+      onChange: setRequireBE,
+    },
   ];
 
   const sortedMatches = useMemo(() => {
@@ -174,6 +205,15 @@ export function FlatView() {
           break;
         case "deviation":
           cmp = a.maxDeviation - b.maxDeviation;
+          break;
+        case "be":
+          cmp =
+            (a.bullishEngulfing ? 1 : 0) - (b.bullishEngulfing ? 1 : 0);
+          if (cmp === 0) {
+            const ao = a.beOffset ?? 99;
+            const bo = b.beOffset ?? 99;
+            cmp = ao - bo;
+          }
           break;
       }
       return cmp * dir;
@@ -202,11 +242,15 @@ export function FlatView() {
       "Slope / Candle",
       "Max Deviation",
       "End Offset",
+      "Bullish Engulfing",
+      "BE Offset",
       "Timeframe",
       "BB Period",
       "BB StdDev",
       "Tolerance",
       "Max Slope",
+      "Require BE",
+      "BE Window",
     ];
     const rows = sortedMatches.map((m) => [
       m.symbol,
@@ -216,11 +260,15 @@ export function FlatView() {
       m.slope.toFixed(6),
       m.maxDeviation.toFixed(6),
       m.endOffset,
+      m.bullishEngulfing ? "Yes" : "No",
+      m.beOffset ?? "",
       interval,
       bbPeriod,
       bbStddev,
       tolerance,
       maxSlope,
+      requireBE ? "Yes" : "No",
+      beWindow,
     ]);
     const csv = [header, ...rows]
       .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
@@ -244,9 +292,10 @@ export function FlatView() {
         onIntervalChange={setIntervalValue}
         commonSettings={commonSettings}
         extraSettings={extraSettings}
+        toggles={toggles}
         disabled={scanning}
         onReset={reset}
-        description="Finds symbols whose recent BB %B values form a nearly-straight line (≥2 candles) at any level — using a best-fit line with tolerance and slope gates."
+        description="Finds symbols whose recent BB %B values form a nearly-straight line (≥2 candles) at any level — using a best-fit line with tolerance and slope gates. Optionally require a bullish engulfing candlestick confirmation."
       />
 
       {/* Action + status bar */}
@@ -290,6 +339,11 @@ export function FlatView() {
             <StatChip label="Progress" value={scan.total > 0 ? `${progressPct}%` : "—"} />
             <StatChip label="Min Candles" value={String(minRunLength)} />
             <StatChip label="Tol" value={tolerance.toFixed(3)} />
+            <StatChip
+              label="Bullish Engulf"
+              value={requireBE ? `Required · ${beWindow}c` : "Optional"}
+              accent={requireBE ? "green" : undefined}
+            />
             {scan.lastUpdated && (
               <StatChip label="Updated" value={scan.lastUpdated.toLocaleTimeString()} />
             )}
@@ -338,6 +392,9 @@ export function FlatView() {
                 <SortableTh onClick={() => toggleSort("deviation")} className="text-right">
                   Max Dev{sortArrow("deviation")}
                 </SortableTh>
+                <SortableTh onClick={() => toggleSort("be")} className="text-center">
+                  Bullish Engulf{sortArrow("be")}
+                </SortableTh>
                 <TableHead className="text-center text-binance-muted text-[11px] uppercase tracking-wide font-semibold">
                   Recency
                 </TableHead>
@@ -349,7 +406,7 @@ export function FlatView() {
             <TableBody>
               {sortedMatches.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={8} className="text-center">
+                  <TableCell colSpan={9} className="text-center">
                     <EmptyState
                       status={scan.status}
                       error={scan.error}
@@ -435,6 +492,22 @@ export function FlatView() {
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums text-binance-muted">
                         {formatBB(m.maxDeviation)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {m.bullishEngulfing ? (
+                          <Badge
+                            className="bg-binance-green/15 text-binance-green border border-binance-green/40 gap-1"
+                            title={`Bullish engulfing ${m.beOffset === 0 ? "on the current candle" : `${m.beOffset} candle${m.beOffset === 1 ? "" : "s"} ago`}`}
+                          >
+                            <Flame className="size-3" />
+                            {m.beOffset === 0 ? "Now" : `${m.beOffset} ago`}
+                          </Badge>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-binance-muted/60">
+                            <CheckCircle2 className="size-3 opacity-30" />
+                            —
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-center">
                         {m.endOffset === 0 ? (

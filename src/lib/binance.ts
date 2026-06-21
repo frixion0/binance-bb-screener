@@ -35,6 +35,10 @@ export interface FlatMatch {
   endOffset: number;
   /** Recent %B series for sparkline rendering. */
   recentBBs: number[];
+  /** Whether a bullish engulfing pattern was found in the recent window. */
+  bullishEngulfing: boolean;
+  /** Candles ago the engulfing's bullish candle occurred (0 = current). null if none. */
+  beOffset: number | null;
 }
 
 export interface CrossoverOptions {
@@ -50,6 +54,10 @@ export interface FlatOptions {
   maxSlope: number;
   minRunLength: number;
   lookback: number;
+  /** When true, only return matches that also show a bullish engulfing. */
+  requireBullishEngulfing: boolean;
+  /** How many recent candle-pairs to scan for the engulfing pattern. */
+  beWindow: number;
 }
 
 /** Fetch every actively trading USDT/USDC perpetual symbol (cached 60s). */
@@ -83,11 +91,19 @@ export async function fetchTradingSymbols(): Promise<string[]> {
   return symbols;
 }
 
-async function fetchCloses(
+export interface Kline {
+  openTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+async function fetchKlines(
   symbol: string,
   interval: string,
   limit: number
-): Promise<number[] | null> {
+): Promise<Kline[] | null> {
   const res = await fetch(
     `${BASE_URL}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
     { cache: "no-store", headers: { Accept: "application/json" } }
@@ -95,9 +111,52 @@ async function fetchCloses(
   if (!res.ok) return null;
   const klines = (await res.json()) as unknown;
   if (!Array.isArray(klines) || klines.length < limit) return null;
-  const closes = (klines as unknown[][]).map((k) => parseFloat(String(k[4])));
-  if (closes.some((c) => Number.isNaN(c))) return null;
-  return closes;
+  const out = (klines as unknown[][]).map((k) => ({
+    openTime: Number(k[0]),
+    open: parseFloat(String(k[1])),
+    high: parseFloat(String(k[2])),
+    low: parseFloat(String(k[3])),
+    close: parseFloat(String(k[4])),
+  }));
+  if (out.some((k) => Number.isNaN(k.open) || Number.isNaN(k.close))) return null;
+  return out;
+}
+
+async function fetchCloses(
+  symbol: string,
+  interval: string,
+  limit: number
+): Promise<number[] | null> {
+  const klines = await fetchKlines(symbol, interval, limit);
+  if (!klines) return null;
+  return klines.map((k) => k.close);
+}
+
+/**
+ * Scan the most recent `window` candle-pairs for a bullish engulfing pattern:
+ * the prior candle is bearish (open > close) and the current candle is bullish
+ * (close > open) with its real body fully engulfing the prior body.
+ * Returns the offset (candles ago) of the bullish candle, or null if none.
+ */
+export function detectBullishEngulfing(
+  klines: Kline[],
+  window: number
+): { found: boolean; offset: number | null } {
+  const n = klines.length;
+  const lastIdx = n - 1;
+  const minIdx = Math.max(1, n - window);
+  for (let i = lastIdx; i >= minIdx; i--) {
+    const prev = klines[i - 1];
+    const curr = klines[i];
+    const prevBearish = prev.open > prev.close;
+    const currBullish = curr.close > curr.open;
+    if (!prevBearish || !currBullish) continue;
+    // Current bullish body fully engulfs the prior bearish body.
+    if (curr.open <= prev.close && curr.close >= prev.open) {
+      return { found: true, offset: lastIdx - i };
+    }
+  }
+  return { found: false, offset: null };
 }
 
 /**
@@ -173,12 +232,17 @@ export async function scanSymbolFlat(
 ): Promise<FlatMatch | null> {
   try {
     const limit = opts.bbPeriod + opts.lookback + 2;
-    const closes = await fetchCloses(symbol, interval, limit);
-    if (!closes) return null;
+    const klines = await fetchKlines(symbol, interval, limit);
+    if (!klines) return null;
+    const closes = klines.map((k) => k.close);
 
     const pctBs = computePctBSeries(closes, opts.bbPeriod, opts.bbStddev);
     const run = detectStraightRun(pctBs, opts);
     if (!run) return null;
+
+    // Check for a bullish engulfing pattern in the most recent candles.
+    const be = detectBullishEngulfing(klines, opts.beWindow);
+    if (opts.requireBullishEngulfing && !be.found) return null;
 
     return {
       symbol,
@@ -189,6 +253,8 @@ export async function scanSymbolFlat(
       maxDeviation: run.maxDeviation,
       endOffset: run.endOffset,
       recentBBs: pctBs.slice(-Math.min(opts.lookback, pctBs.length)),
+      bullishEngulfing: be.found,
+      beOffset: be.offset,
     };
   } catch {
     return null;

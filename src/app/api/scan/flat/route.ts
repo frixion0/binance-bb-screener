@@ -21,6 +21,10 @@ export async function GET(request: Request) {
   const maxSlope = clampNumber(searchParams.get("maxSlope"), 0.05, 0, 5);
   const minRunLength = clampNumber(searchParams.get("minRunLength"), 3, 2, 100);
   const lookback = clampNumber(searchParams.get("lookback"), 30, 5, 200);
+  const requireBullishEngulfing =
+    searchParams.get("requireBullishEngulfing") === "1" ||
+    searchParams.get("requireBullishEngulfing") === "true";
+  const beWindow = clampNumber(searchParams.get("beWindow"), 3, 1, 20);
 
   const encoder = new TextEncoder();
 
@@ -37,6 +41,8 @@ export async function GET(request: Request) {
             maxSlope,
             minRunLength,
             lookback,
+            requireBullishEngulfing,
+            beWindow,
           }),
       });
     },
