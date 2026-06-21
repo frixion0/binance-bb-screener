@@ -52,3 +52,11 @@ prompt
 server.log
 # Skills directory
 /skills/
+# environment files
+.env
+.env*.local
+.env.local
+
+# database
+/db/*.db
+/db/*.db-journal
